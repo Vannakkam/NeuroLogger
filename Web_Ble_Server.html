@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Waveshare IMU 200Hz - WebBLE Receiver</title>
+<!-- Chart.js via CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#0a0a1a; --fg:#eaf7ff; --accent:#00d4ff; --warn:#ffb35c; --danger:#ff4444; --panel:#101820; --grid:#233040; }
+  * { box-sizing:border-box; font-family:'Segoe UI', system-ui, sans-serif; }
+  body { background:linear-gradient(135deg,#0a0a1a,#0f0f23); color:var(--fg); margin:0; padding:20px; min-height:100vh; }
+  .container { max-width:1000px; margin:0 auto; }
+  h1 { text-align:center; color:var(--accent); margin-bottom:10px; font-size:1.6rem; }
+  .status-row { display:flex; gap:16px; flex-wrap:wrap; justify-content:center; margin-bottom:20px; font-size:0.85rem; }
+  .status-item { display:flex; align-items:center; gap:6px; padding:6px 12px; background:rgba(255,255,255,0.05); border-radius:20px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--danger); box-shadow:0 0 0 0 var(--danger); transition:all 0.3s; }
+  .dot.connected { background:#00ff88; box-shadow:0 0 8px 2px #00ff88; animation:pulse 1.5s infinite; }
+  @keyframes pulse { 0% { box-shadow:0 0 0 0 #00ff88; } 70% { box-shadow:0 0 10px 5px rgba(0,255,136,0); } 100% { box-shadow:0 0 0 0 rgba(0,255,136,0); } }
+  
+  .card { background:rgba(255,255,255,0.04); backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:20px; margin-bottom:20px; }
+  .card h2 { margin:0 0 16px 0; font-size:1rem; color:var(--accent); border-left:3px solid var(--accent); padding-left:10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; margin-bottom:20px; }
+  .metric { background:rgba(0,0,0,0.3); border-radius:10px; padding:12px; text-align:center; }
+  .metric .label { font-size:0.7rem; color:#888; text-transform:uppercase; letter-spacing:0.5px; }
+  .metric .value { font-size:1.2rem; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; font-family:'JetBrains Mono', monospace; }
+  .metric .unit { font-size:0.65rem; color:#666; margin-left:2px; }
+  
+  .chart-wrap { position:relative; height:220px; background:rgba(0,0,0,0.2); border-radius:8px; margin-bottom:12px; }
+  canvas { width:100% !important; height:100% !important; }
+  
+  .controls { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top:10px; }
+  button { background:linear-gradient(135deg,var(--accent),#0099cc); border:none; color:#000; padding:10px 20px; font-weight:600; border-radius:24px; cursor:pointer; transition:transform 0.1s, box-shadow 0.2s; }
+  button:hover { transform:scale(1.03); box-shadow:0 4px 15px rgba(0,212,255,0.4); }
+  button:active { transform:scale(0.98); }
+  button.recording { background:linear-gradient(135deg,#ff4444,#cc0000); color:#fff; animation:recPulse 1s infinite; }
+  @keyframes recPulse { 0% { box-shadow:0 0 0 0 #ff4444; } 70% { box-shadow:0 0 10px 5px rgba(255,68,68,0); } }
+  button:disabled { opacity:0.5; cursor:not-allowed; transform:none; box-shadow:none; }
+  
+  .log { font-size:0.7rem; font-family:monospace; color:#666; text-align:center; margin-top:10px; min-height:1.2em; }
+  footer { text-align:center; font-size:0.7rem; color:#444; margin-top:30px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>BCMCH IMU Stream <span style="font-weight:400;color:#666;font-size:0.8em;">(WebBLE)</span></h1>
+  
+  <div class="status-row">
+    <div class="status-item"><span class="dot" id="dotBle"></span><span id="lblBle">Disconnected</span></div>
+    <div class="status-item"><span class="dot" id="dotStream"></span><span id="lblStream">No Data</span></div>
+    <div class="status-item"><span id="lblRate">0 Hz</span></div>
+    <div class="status-item"><span id="lblLatency">Latency: -- ms</span></div>
+    <div class="status-item"><span id="lblCount">Samples: 0</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Live Values (Latest Sample in Batch)</h2>
+    <div class="grid">
+      <div class="metric"><div class="label">Accel X</div><div class="value" id="vAx">0.000</div><div class="unit">g</div></div>
+      <div class="metric"><div class="label">Accel Y</div><div class="value" id="vAy">0.000</div><div class="unit">g</div></div>
+      <div class="metric"><div class="label">Accel Z</div><div class="value" id="vAz">0.000</div><div class="unit">g</div></div>
+      <div class="metric"><div class="label">Gyro X</div><div class="value" id="vGx">0.0</div><div class="unit">dps</div></div>
+      <div class="metric"><div class="label">Gyro Y</div><div class="value" id="vGy">0.0</div><div class="unit">dps</div></div>
+      <div class="metric"><div class="label">Gyro Z</div><div class="value" id="vGz">0.0</div><div class="unit">dps</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Accelerometer (g) - Last 2 Seconds (400 Samples)</h2>
+    <div class="chart-wrap"><canvas id="chartAccel"></canvas></div>
+  </div>
+  <div class="card">
+    <h2>Gyroscope (dps) - Last 2 Seconds (400 Samples)</h2>
+    <div class="chart-wrap"><canvas id="chartGyro"></canvas></div>
+  </div>
+
+  <div class="controls">
+    <button id="btnConnect" onclick="connect()">Connect to IMU</button>
+    <button id="btnRecord" onclick="toggleRecord()" disabled>Start CSV Recording</button>
+    <button id="btnDownload" onclick="downloadCSV()" disabled>Download CSV</button>
+    <button onclick="clearCharts()">Clear Charts</button>
+  </div>
+  <div class="log" id="log">Click "Connect to IMU" to start.</div>
+</div>
+<footer>Waveshare ESP32-S3-Touch-LCD-1.46 | QMI8658 @ 200Hz | Batched BLE (8 samples/pkt)</footer>
+
+<script>
+// ================================================================
+// CONFIGURATION (Must match Firmware)
+// ================================================================
+const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+const TX_CHAR_UUID = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
+const DEVICE_NAME_FILTER = 'Waveshare_IMU_200Hz';
+
+// Firmware sends: 8 samples * (uint32_ts + 6 floats) = 8 * 28 = 224 bytes
+const SAMPLES_PER_PACKET = 8;
+const BYTES_PER_SAMPLE = 28; // 4 + 6*4
+const PACKET_SIZE = SAMPLES_PER_PACKET * BYTES_PER_SAMPLE; // 224
+const FLOAT_COUNT_PER_PACKET = SAMPLES_PER_PACKET * 7; // 56 floats/ints (mixed)
+
+// Chart History Length (200Hz * 2s = 400 points)
+const MAX_POINTS = 400;
+
+// ================================================================
+// STATE
+// ================================================================
+let device = null;
+let server = null;
+let txCharacteristic = null;
+let isRecording = false;
+let csvRows = []; // {ts, ax,ay,az, gx,gy,gz, recvMs}
+let totalSamples = 0;
+let lastRateCheck = performance.now();
+let samplesSinceRateCheck = 0;
+let packetCount = 0;
+
+// Chart.js Instances
+let chartAccel, chartGyro;
+const chartColors = {
+  ax: '#00d4ff', ay: '#46f29a', az: '#ffb35c',
+  gx: '#ff4444', gy: '#ff7bea', gz: '#70e7ff'
+};
+
+// ================================================================
+// INIT CHARTS
+// ================================================================
+function createChart(ctx, labels, datasets) {
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { display: false },
+        y: { 
+          grid: { color: '#233040', borderColor: '#233040' }, 
+          ticks: { color: '#666', font: { size: 10 } },
+          // title: { display: true, text: '(g)', color: '#888', font: { size: 10 } }
+        }
+      },
+      plugins: { legend: { display: true, labels: { color: '#aaa', font: { size: 10 }, usePointStyle: true } }, tooltip: { enabled: false } },
+      elements: { point: { radius: 0 }, line: { borderWidth: 1.5, tension: 0.1 } }
+    }
+  });
+}
+
+function initCharts() {
+  const labels = Array.from({length: MAX_POINTS}, (_, i) => i);
+  const emptyData = Array(MAX_POINTS).fill(null);
+  
+  const accelDatasets = ['ax','ay','az'].map(k => ({
+    label: k.toUpperCase(), data: [...emptyData], borderColor: chartColors[k], backgroundColor: chartColors[k] + '33'
+  }));
+  const gyroDatasets = ['gx','gy','gz'].map(k => ({
+    label: k.toUpperCase(), data: [...emptyData], borderColor: chartColors[k], backgroundColor: chartColors[k] + '33'
+  }));
+
+  chartAccel = createChart(document.getElementById('chartAccel').getContext('2d'), labels, accelDatasets);
+  chartGyro  = createChart(document.getElementById('chartGyro').getContext('2d'), labels, gyroDatasets);
+}
+
+// ================================================================
+// UI HELPERS
+// ================================================================
+const $ = (id) => document.getElementById(id);
+const log = (msg) => $('log').textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+const setStatus = (el, connected, text) => { el.className = 'dot ' + (connected ? 'connected' : ''); el.nextElementSibling.textContent = text; };
+
+function pushChart(chart, datasets, newVals) {
+  // newVals: {ax, ay, az} or {gx, gy, gz}
+  chart.data.datasets.forEach((ds, i) => {
+    const key = ds.label.toLowerCase();
+    ds.data.shift();
+    ds.data.push(newVals[key]);
+  });
+  chart.update('none'); // 'none' disables animation for max perf
+}
+
+// ================================================================
+// BLE LOGIC
+// ================================================================
+async function connect() {
+  if (!navigator.bluetooth) { alert('Web Bluetooth not supported. Use Chrome/Edge/Opera on Android/Windows/Mac/Linux/ChromeOS.'); return; }
+  
+  $('btnConnect').disabled = true;
+  $('btnConnect').textContent = 'Scanning...';
+  log('Requesting device...');
+
+  try {
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Waveshare_IMU' }, { services: [SERVICE_UUID] }],
+      optionalServices: [SERVICE_UUID]
+    });
+
+    log(`Connecting to ${device.name}...`);
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    
+    server = await device.gatt.connect();
+    log('Connected. Getting service...');
+    
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    txCharacteristic = await service.getCharacteristic(TX_CHAR_UUID);
+    
+    log('Starting notifications...');
+    await txCharacteristic.startNotifications();
+    txCharacteristic.addEventListener('characteristicvaluechanged', handleNotifications);
+    
+    setStatus($('dotBle'), true, 'Connected');
+    $('btnConnect').textContent = 'Connected';
+    $('btnConnect').style.background = 'linear-gradient(135deg,#46f29a,#2ec476)';
+    $('btnRecord').disabled = false;
+    log('Streaming data...');
+
+  } catch (err) {
+    log(`Error: ${err.name} - ${err.message}`);
+    setStatus($('dotBle'), false, 'Error');
+    $('btnConnect').disabled = false;
+    $('btnConnect').textContent = 'Connect to IMU';
+    $('btnConnect').style.background = '';
+  }
+}
+
+function onDisconnected() {
+  log('Device disconnected.');
+  setStatus($('dotBle'), false, 'Disconnected');
+  setStatus($('dotStream'), false, 'No Data');
+  $('btnConnect').disabled = false;
+  $('btnConnect').textContent = 'Connect to IMU';
+  $('btnConnect').style.background = '';
+  $('btnRecord').disabled = true;
+  stopRecord();
+  server = null; txCharacteristic = null;
+}
+
+function handleNotifications(event) {
+  const buffer = event.target.value.buffer;
+  if (buffer.byteLength !== PACKET_SIZE) {
+    // console.warn(`Unexpected packet size: ${buffer.byteLength}`);
+    return;
+  }
+  
+  const recvMs = performance.now(); // Browser receive timestamp
+  const view = new DataView(buffer);
+  let offset = 0;
+  
+  // Parse 8 samples
+  for (let i = 0; i < SAMPLES_PER_PACKET; i++) {
+    // Little Endian: uint32 (ts), float32 x6
+    const ts = view.getUint32(offset, true); offset += 4;
+    const ax = view.getFloat32(offset, true); offset += 4;
+    const ay = view.getFloat32(offset, true); offset += 4;
+    const az = view.getFloat32(offset, true); offset += 4;
+    const gx = view.getFloat32(offset, true); offset += 4;
+    const gy = view.getFloat32(offset, true); offset += 4;
+    const gz = view.getFloat32(offset, true); offset += 4;
+
+    // Update UI with LAST sample in batch (most recent)
+    if (i === SAMPLES_PER_PACKET - 1) {
+      updateLiveUI({ax,ay,az,gx,gy,gz}, recvMs);
+    }
+
+    // Record all samples
+    if (isRecording) {
+      csvRows.push({ts, ax,ay,az, gx,gy,gz, recvMs});
+    }
+    
+    // Push to charts (downsample or push all? Push all for 200Hz accuracy)
+    pushChart(chartAccel, chartAccel.data.datasets, {ax, ay, az});
+    pushChart(chartGyro, chartGyro.data.datasets, {gx, gy, gz});
+    
+    totalSamples++;
+    samplesSinceRateCheck++;
+  }
+  packetCount++;
+  
+  // Rate Calculation
+  const now = performance.now();
+  if (now - lastRateCheck >= 1000) {
+    const rate = samplesSinceRateCheck;
+    $('lblRate').textContent = `${rate} Hz`;
+    $('lblCount').textContent = `Samples: ${totalSamples}`;
+    samplesSinceRateCheck = 0;
+    lastRateCheck = now;
+    setStatus($('dotStream'), true, 'Streaming');
+  }
+}
+
+function updateLiveUI(d, recvMs) {
+  $('vAx').textContent = d.ax.toFixed(3);
+  $('vAy').textContent = d.ay.toFixed(3);
+  $('vAz').textContent = d.az.toFixed(3);
+  $('vGx').textContent = d.gx.toFixed(1);
+  $('vGy').textContent = d.gy.toFixed(1);
+  $('vGz').textContent = d.gz.toFixed(1);
+  
+  // Estimate latency: (Browser Now - ESP micros()) is tricky without clock sync.
+  // We show browser-side processing latency roughly.
+  // $('lblLatency').textContent = `Latency: ~${(performance.now() - recvMs).toFixed(1)}ms`; 
+}
+
+// ================================================================
+// CSV RECORDING
+// ================================================================
+function toggleRecord() {
+  if (!isRecording) startRecord();
+  else stopRecord();
+}
+
+function startRecord() {
+  isRecording = true;
+  csvRows = [];
+  totalSamples = 0;
+  $('btnRecord').textContent = 'Stop Recording';
+  $('btnRecord').classList.add('recording');
+  $('btnDownload').disabled = true;
+  log('Recording started...');
+}
+
+function stopRecord() {
+  if (!isRecording) return;
+  isRecording = false;
+  $('btnRecord').textContent = 'Start CSV Recording';
+  $('btnRecord').classList.remove('recording');
+  if (csvRows.length > 0) $('btnDownload').disabled = false;
+  log(`Recording stopped. ${csvRows.length} samples captured.`);
+}
+
+function downloadCSV() {
+  if (csvRows.length === 0) return;
+  
+  // Header matches firmware CSV_HEADER
+  let csv = 'Timestamp(us),AX(g),AY(g),AZ(g),GX(dps),GY(dps),GZ(dps),RecvMs(ms)\n';
+  csv += csvRows.map(r => 
+    `${r.ts},${r.ax.toFixed(4)},${r.ay.toFixed(4)},${r.az.toFixed(4)},` +
+    `${r.gx.toFixed(2)},${r.gy.toFixed(2)},${r.gz.toFixed(2)},${r.recvMs.toFixed(2)}`
+  ).join('\n');
+  
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bcmch_imu_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  log('CSV downloaded.');
+}
+
+function clearCharts() {
+  chartAccel.data.datasets.forEach(ds => ds.data.fill(null));
+  chartGyro.data.datasets.forEach(ds => ds.data.fill(null));
+  chartAccel.update('none');
+  chartGyro.update('none');
+  totalSamples = 0;
+  $('lblCount').textContent = 'Samples: 0';
+  log('Charts cleared.');
+}
+
+// ================================================================
+// BOOTSTRAP
+// ================================================================
+initCharts();
+
+// Handle page visibility to avoid chart updates when tab hidden (saves CPU)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) log('Tab hidden - charts paused');
+  else log('Tab visible - resuming');
+});
+</script>
+</body>
+</html>
